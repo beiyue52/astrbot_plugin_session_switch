@@ -1,0 +1,58 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "总开关",
+    "hint": "关闭后 /end 和 /begin 都不再起作用，机器人照常说话",
+    "default": true
+  },
+  "whitelist": {
+    "type": "list",
+    "description": "白名单：只有这些人/会话能用 /end 和 /begin",
+    "hint": "可以填 QQ 号、群号，或完整会话标识（如 aiocqhttp:GroupMessage:12345）。留空＝谁都不能用（除管理员）。不知道自己 ID 就在群里发 /sid 或直接发 /end 看提示。",
+    "default": []
+  },
+  "allow_admin": {
+    "type": "bool",
+    "description": "AstrBot 管理员始终可用",
+    "hint": "admins_id 里配置的人无视白名单，永远能开关",
+    "default": true
+  },
+  "allow_all": {
+    "type": "bool",
+    "description": "所有人都能用（不推荐）",
+    "hint": "打开后白名单失效，群里任何人都能让她闭嘴",
+    "default": false
+  },
+  "empty_whitelist_allow": {
+    "type": "bool",
+    "description": "白名单为空时允许所有人使用",
+    "hint": "默认关闭。打开后第一次配置前任何人都能开关，建议先填好白名单再关掉这个",
+    "default": false
+  },
+  "end_text": {
+    "type": "string",
+    "description": "/end 之后的回复内容",
+    "default": "已关闭输出"
+  },
+  "begin_text": {
+    "type": "string",
+    "description": "/begin 之后的回复内容",
+    "default": "已启用输出"
+  },
+  "end_repeat_hint": {
+    "type": "bool",
+    "description": "重复 /end 时追加提示「（本来就是关着的）」",
+    "default": true
+  },
+  "begin_repeat_hint": {
+    "type": "bool",
+    "description": "重复 /begin 时追加提示「（本来就是开着的）」",
+    "default": true
+  },
+  "mute_block_proactive": {
+    "type": "bool",
+    "description": "闭嘴期间连主动消息也拦掉",
+    "hint": "主动消息类插件不走普通对话链路，打开这个才能真正完全静音；关掉则主动消息仍会发",
+    "default": true
+  }
+}

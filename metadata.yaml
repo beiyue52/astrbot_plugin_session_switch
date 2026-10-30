@@ -1,0 +1,46 @@
+name: astrbot_plugin_session_switch
+display_name: 会话开关
+author: beiyue52
+version: 1.1.0
+short_desc: 按会话让机器人闭嘴 / 恢复说话，带白名单权限，静默期间指令照常可用
+desc: |
+  用 /end 让机器人闭嘴、/begin 恢复说话。和常见的全局开关不同，本插件按会话独立生效：
+  在哪个群或私聊里关，就只关那一个，其他会话照常聊天。
+
+  拦截方式是在「要调模型」和「要发消息」两个点上掐断，而不是把整条消息事件丢掉，因此：
+  1）静默期间消息照常接收、指令照常可用（/help 之类不会被一起吞掉）；
+  2）静默期间不会调用模型，不消耗 token；
+  3）群聊上下文照常累积，/begin 之后模型能接上前文；
+  4）可选连带拦截主动消息（主动消息类插件自己发的消息）。
+
+  开关状态存在插件 KV 里，重启不丢。权限支持四种模式：白名单、管理员、所有人、白名单为空时的兜底策略。
+  状态查询用 /switch。缺失的事件钩子会自动降级，AstrBot 4.16 及以上版本均可加载。
+repo: https://github.com/beiyue52/astrbot_plugin_session_switch
+astrbot_version: ">=4.16,<5"
+support_platforms:
+  - aiocqhttp
+  - telegram
+  - qq_official
+  - qq_official_webhook
+  - lark
+  - dingtalk
+  - discord
+  - slack
+  - kook
+  - satori
+  - misskey
+  - line
+  - matrix
+  - wecom
+  - wecom_ai_bot
+  - vocechat
+  - weixin_official_account
+  - weixin_oc
+  - mattermost
+  - webchat
+tags:
+  - 工具
+  - 群管理
+  - 会话控制
+  - 静默
+  - tool
