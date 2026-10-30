@@ -24,7 +24,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 KV_KEY = "muted_sessions"
 """插件 KV 存储里的键名。"""

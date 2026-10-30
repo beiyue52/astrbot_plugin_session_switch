@@ -3,7 +3,7 @@
 用 `/end` 让机器人闭嘴、`/begin` 让她恢复说话。**按会话独立生效** —— 在哪个群关，就只关那一个，别的群和私聊照常聊天。状态存插件 KV，重启不丢。
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16%2C%3C5-blue)](https://github.com/AstrBotDevs/AstrBot)
-[![version](https://img.shields.io/badge/version-1.1.0-green)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.1.1-green)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
 ---
@@ -34,7 +34,7 @@
 装完重载插件，日志出现这行就算起来了：
 
 ```
-[session_switch] v1.1.0 已加载 enabled=True 静默会话数=0 白名单数=1
+[session_switch] v1.1.1 已加载 enabled=True 静默会话数=0 白名单数=1
 ```
 
 ---

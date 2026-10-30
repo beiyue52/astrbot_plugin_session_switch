@@ -1,7 +1,7 @@
 name: astrbot_plugin_session_switch
 display_name: 会话开关
 author: beiyue52
-version: 1.1.0
+version: 1.1.1
 short_desc: 按会话让机器人闭嘴 / 恢复说话，带白名单权限，静默期间指令照常可用
 desc: |
   用 /end 让机器人闭嘴、/begin 恢复说话。和常见的全局开关不同，本插件按会话独立生效：
