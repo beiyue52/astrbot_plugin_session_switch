@@ -154,9 +154,7 @@ class SessionSwitchPlugin(Star):
 
         if isinstance(data, dict):
             self._muted = {
-                str(umo): info
-                for umo, info in data.items()
-                if isinstance(info, dict)
+                str(umo): info for umo, info in data.items() if isinstance(info, dict)
             }
         else:
             self._muted = {}
@@ -453,9 +451,7 @@ class SessionSwitchPlugin(Star):
             return
 
         event.stop_event()
-        logger.debug(
-            f"[session_switch] 已拦截 LLM 请求 umo={event.unified_msg_origin}"
-        )
+        logger.debug(f"[session_switch] 已拦截 LLM 请求 umo={event.unified_msg_origin}")
 
     # ------------------------------------------------------------------
     # 拦截 2：阻止消息发出（挡住主动消息等绕过 LLM 链路的输出）
@@ -483,6 +479,4 @@ class SessionSwitchPlugin(Star):
             return
 
         event.stop_event()
-        logger.debug(
-            f"[session_switch] 已拦截消息发送 umo={event.unified_msg_origin}"
-        )
+        logger.debug(f"[session_switch] 已拦截消息发送 umo={event.unified_msg_origin}")

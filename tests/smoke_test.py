@@ -187,7 +187,7 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
     star_mod.Context = Context
     star_mod.Star = Star
     star_mod.StarTools = object
-    star_mod.register = lambda *a, **k: (lambda c: c)
+    star_mod.register = lambda *a, **k: lambda c: c
 
     api.event = event_mod
     api.star = star_mod
@@ -200,7 +200,13 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
         "astrbot.api.event.filter": filter_mod,
         "astrbot.api.star": star_mod,
     }
-    return modules, AstrMessageEvent, MessageEventResult, ResultContentType, AstrBotConfig
+    return (
+        modules,
+        AstrMessageEvent,
+        MessageEventResult,
+        ResultContentType,
+        AstrBotConfig,
+    )
 
 
 def load_plugin(modules, plugin_path: Path):
@@ -223,7 +229,9 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     module = load_plugin(modules, ROOT / "main.py")
 
     cfg = Config(enabled=True, whitelist=["1001"], allow_admin=True)
-    plugin = module.SessionSwitchPlugin(context=modules["astrbot.api.star"].Context(), config=cfg)
+    plugin = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(), config=cfg
+    )
 
     check("__version__ 已声明", isinstance(getattr(module, "__version__", None), str))
     check(
@@ -319,7 +327,10 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     plugin6 = module.SessionSwitchPlugin(
         context=modules["astrbot.api.star"].Context(), config=Config(whitelist=["9999"])
     )
-    check("管理员无视白名单", plugin6._is_allowed(Event(sender="1001", admin=True)) is True)
+    check(
+        "管理员无视白名单",
+        plugin6._is_allowed(Event(sender="1001", admin=True)) is True,
+    )
 
     # 脏 KV 数据
     plugin7 = module.SessionSwitchPlugin(
@@ -339,12 +350,13 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     # 自定义指令名：带斜杠、空格、全角空格都要洗干净
     p_cmd = module.SessionSwitchPlugin(
         context=modules["astrbot.api.star"].Context(),
-        config=Config(end_command="/闭嘴", begin_command="  说话  ", status_command="／状态"),
+        config=Config(
+            end_command="/闭嘴", begin_command="  说话  ", status_command="／状态"
+        ),
     )
     check(
         "指令名清洗（去斜杠和空白）",
-        p_cmd._command_names
-        == {"end": "闭嘴", "begin": "说话", "switch": "状态"},
+        p_cmd._command_names == {"end": "闭嘴", "begin": "说话", "switch": "状态"},
         str(p_cmd._command_names),
     )
 
@@ -403,7 +415,10 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     class _EmptyHandler:
         event_filters = []
 
-    check("无指令过滤器时安全跳过", module._apply_command_name(_EmptyHandler(), "x") is False)
+    check(
+        "无指令过滤器时安全跳过",
+        module._apply_command_name(_EmptyHandler(), "x") is False,
+    )
 
     # 自定义重复提示语
     p_hint = module.SessionSwitchPlugin(
