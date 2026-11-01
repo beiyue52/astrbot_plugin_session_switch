@@ -3,12 +3,18 @@
 本项目的所有重要变更都会记录在这里。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-11-02
+
+### 修复
+
+- 修复了重复开启/关闭指令的反馈输出，不再跟开启/关闭指令的反馈输出相连
+
 ## [1.2.0] - 2026-11-01
 
 ### 新增
 
 - 新增 `end_command` / `begin_command` / `status_command` 配置，三个指令名都能改，比如把 `/end` 改成 `/闭嘴`。填的时候带不带斜杠都行。
-- 新增 `end_repeat_text` / `begin_repeat_text` 配置，重复操作时追加的那句话可以自定义。
+- 新增 `end_repeat_text` / `begin_repeat_text` 配置，重复操作时的回复文案可以自定义。
 
 ### 变更
 
@@ -30,7 +36,7 @@
 
 - 新增 `/switch`（别名 `/mute_status`）指令，查看本会话当前开关状态、操作人和操作时间。
 - 新增 `mute_block_proactive` 配置，闭嘴期间可连带拦截主动消息。
-- 新增 `end_repeat_hint` / `begin_repeat_hint` 配置，控制重复操作时的追加提示。
+- 新增 `end_repeat_hint` / `begin_repeat_hint` 配置，控制重复操作时是否给提示。
 - 新增 `logo.png` 插件图标。
 
 ### 变更

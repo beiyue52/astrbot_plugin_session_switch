@@ -420,7 +420,7 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
         module._apply_command_name(_EmptyHandler(), "x") is False,
     )
 
-    # 自定义重复提示语
+    # 自定义重复提示语：填了就以它为准，不与主文案相连
     p_hint = module.SessionSwitchPlugin(
         context=modules["astrbot.api.star"].Context(),
         config=Config(
@@ -434,8 +434,8 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     ev_h1 = Event(sender="1001", umo="aiocqhttp:GroupMessage:7")
     asyncio.run(p_hint.cmd_begin(ev_h1))
     check(
-        "重复恢复用自定义提示语",
-        "".join(ev_h1.get_result().texts) == "行（一直开着呢）",
+        "重复恢复只输出自定义提示语",
+        "".join(ev_h1.get_result().texts) == "（一直开着呢）",
         "".join(ev_h1.get_result().texts),
     )
     ev_h2 = Event(sender="1001", umo="aiocqhttp:GroupMessage:7")
@@ -443,12 +443,56 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     ev_h3 = Event(sender="1001", umo="aiocqhttp:GroupMessage:7")
     asyncio.run(p_hint.cmd_end(ev_h3))
     check(
-        "重复关闭用自定义提示语",
-        "".join(ev_h3.get_result().texts) == "好（已经关过了）",
+        "重复关闭只输出自定义提示语",
+        "".join(ev_h3.get_result().texts) == "（已经关过了）",
         "".join(ev_h3.get_result().texts),
     )
 
-    # 关掉追加提示后，重复操作只回主文案
+    # 没自定义提示语时，重复操作只回默认的那句括号文案
+    p_def = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(whitelist=["1001"]),
+    )
+    ev_d1 = Event(sender="1001", umo="aiocqhttp:GroupMessage:9")
+    asyncio.run(p_def.cmd_begin(ev_d1))
+    check(
+        "默认提示语在重复恢复时单独成句",
+        "".join(ev_d1.get_result().texts) == "（本来就是开着的）",
+        "".join(ev_d1.get_result().texts),
+    )
+    ev_d2 = Event(sender="1001", umo="aiocqhttp:GroupMessage:9")
+    asyncio.run(p_def.cmd_end(ev_d2))
+    ev_d3 = Event(sender="1001", umo="aiocqhttp:GroupMessage:9")
+    asyncio.run(p_def.cmd_end(ev_d3))
+    check(
+        "默认提示语在重复关闭时单独成句",
+        "".join(ev_d3.get_result().texts) == "（本来就是关着的）",
+        "".join(ev_d3.get_result().texts),
+    )
+
+    # 首次操作仍走主文案，不受重复提示语影响
+    p_first = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(whitelist=["1001"], begin_text="输出已恢复"),
+    )
+    # 先 /end 进入静默，这样紧接着的 /begin 才是真正的「首次恢复」
+    asyncio.run(p_first.cmd_end(Event(sender="1001", umo="aiocqhttp:GroupMessage:10")))
+    ev_f1 = Event(sender="1001", umo="aiocqhttp:GroupMessage:10")
+    asyncio.run(p_first.cmd_begin(ev_f1))
+    check(
+        "首次恢复只输出主文案",
+        "".join(ev_f1.get_result().texts) == "输出已恢复",
+        "".join(ev_f1.get_result().texts),
+    )
+    ev_f2 = Event(sender="1001", umo="aiocqhttp:GroupMessage:10")
+    asyncio.run(p_first.cmd_begin(ev_f2))
+    check(
+        "重复恢复只输出提示语，不与主文案相连",
+        "".join(ev_f2.get_result().texts) == "（本来就是开着的）",
+        "".join(ev_f2.get_result().texts),
+    )
+
+    # 关掉重复提示后，重复操作只回主文案
     p_nohint = module.SessionSwitchPlugin(
         context=modules["astrbot.api.star"].Context(),
         config=Config(whitelist=["1001"], end_repeat_hint=False, end_text="好"),
@@ -457,7 +501,7 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     ev_n = Event(sender="1001", umo="aiocqhttp:GroupMessage:8")
     asyncio.run(p_nohint.cmd_end(ev_n))
     check(
-        "关掉追加提示后不加尾巴",
+        "关掉重复提示后只回主文案",
         "".join(ev_n.get_result().texts) == "好",
         "".join(ev_n.get_result().texts),
     )

@@ -3,7 +3,7 @@
 用 `/end` 让机器人闭嘴、`/begin` 让她恢复说话。**按会话独立生效** —— 在哪个群关，就只关那一个，别的群和私聊照常聊天。状态存插件 KV，重启不丢。**指令名可以自定义**，想叫 `/闭嘴` 就叫 `/闭嘴`。
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16%2C%3C5-blue)](https://github.com/AstrBotDevs/AstrBot)
-[![version](https://img.shields.io/badge/version-1.2.0-green)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.2.1-green)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
 ---
@@ -36,7 +36,7 @@
 装完重载插件，日志出现这行就算起来了：
 
 ```
-[session_switch] v1.2.0 已加载 enabled=True 静默会话数=0 白名单数=1 指令=end/begin/switch
+[session_switch] v1.2.1 已加载 enabled=True 静默会话数=0 白名单数=1 指令=end/begin/switch
 ```
 
 ---
@@ -72,10 +72,10 @@
 | `status_command` | string | `switch` | 查看状态的指令名 |
 | `end_text` | string | `已关闭输出` | `/end` 的回复内容 |
 | `begin_text` | string | `已启用输出` | `/begin` 的回复内容 |
-| `end_repeat_hint` | bool | `true` | 重复关闭时是否追加提示 |
-| `end_repeat_text` | string | `（本来就是关着的）` | 重复关闭时追加的那句话 |
-| `begin_repeat_hint` | bool | `true` | 重复恢复时是否追加提示 |
-| `begin_repeat_text` | string | `（本来就是开着的）` | 重复恢复时追加的那句话 |
+| `end_repeat_hint` | bool | `true` | 重复关闭时是否给提示 |
+| `end_repeat_text` | string | `（本来就是关着的）` | 仅在上一项打开时生效。重复 `/end` 时只发这一句 |
+| `begin_repeat_hint` | bool | `true` | 重复恢复时是否给提示 |
+| `begin_repeat_text` | string | `（本来就是开着的）` | 仅在上一项打开时生效。重复 `/begin` 时只发这一句 |
 
 **权限判定顺序**：`allow_all` → 管理员 → 白名单匹配 → 名单为空时看 `empty_whitelist_allow`。
 
@@ -116,6 +116,7 @@
 
 | 版本 | 主要变化 |
 |---|---|
+| `1.2.1` | 修复了重复开启/关闭指令的反馈输出，不再跟开启/关闭指令的反馈输出相连 |
 | `1.2.0` | 三个指令名和重复提示语都能自定义（`end_command` / `begin_command` / `status_command` / `end_repeat_text` / `begin_repeat_text`） |
 | `1.1.1` | 文档整理 |
 | `1.1.0` | 新增 `/switch` 查状态、`mute_block_proactive` 拦主动消息、钩子降级兼容 4.16+ |

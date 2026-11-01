@@ -59,24 +59,24 @@
   },
   "end_repeat_hint": {
     "type": "bool",
-    "description": "重复关闭时追加提示",
+    "description": "重复关闭时给出提示",
     "default": true
   },
   "end_repeat_text": {
     "type": "string",
-    "description": "重复关闭时追加的那句话",
-    "hint": "仅在上一项打开时生效。会直接拼在 end_text 后面。",
+    "description": "重复关闭时的回复内容",
+    "hint": "仅在上一项打开时生效。重复 /end 时只发这一句",
     "default": "（本来就是关着的）"
   },
   "begin_repeat_hint": {
     "type": "bool",
-    "description": "重复恢复时追加提示",
+    "description": "重复恢复时给出提示",
     "default": true
   },
   "begin_repeat_text": {
     "type": "string",
-    "description": "重复恢复时追加的那句话",
-    "hint": "仅在上一项打开时生效。会直接拼在 begin_text 后面。",
+    "description": "重复恢复时的回复内容",
+    "hint": "仅在上一项打开时生效。重复 /begin 时只发这一句",
     "default": "（本来就是开着的）"
   },
   "mute_block_proactive": {

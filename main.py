@@ -26,7 +26,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 KV_KEY = "muted_sessions"
 """插件 KV 存储里的键名。"""
@@ -223,6 +223,13 @@ class SessionSwitchPlugin(Star):
             return value
         return default
 
+    def _repeat_reply(self, key: str, default: str) -> str:
+        """重复操作时回复的那句话。
+
+        重复操作的反馈输出不与首次操作的反馈输出相连，只发这一句。
+        """
+        return self._cfg_text(key, default)
+
     @property
     def _command_names(self) -> dict[str, str]:
         """三个指令当前该用的名字。
@@ -353,9 +360,10 @@ class SessionSwitchPlugin(Star):
 
         # 放行这条回执本身，否则会被下面的 on_decorating_result 吞掉
         event.set_extra(ALLOW_EXTRA, True)
-        text = self._cfg_text("end_text", "已关闭输出")
         if already and self.config.get("end_repeat_hint", True):
-            text += self._cfg_text("end_repeat_text", "（本来就是关着的）")
+            text = self._repeat_reply("end_repeat_text", "（本来就是关着的）")
+        else:
+            text = self._cfg_text("end_text", "已关闭输出")
         event.set_result(MessageEventResult().message(text))
         logger.info(
             f"[session_switch] 关闭输出 umo={umo} by={event.get_sender_id()} "
@@ -382,9 +390,10 @@ class SessionSwitchPlugin(Star):
             await self._save()
 
         event.set_extra(ALLOW_EXTRA, True)
-        text = self._cfg_text("begin_text", "已启用输出")
         if not was_muted and self.config.get("begin_repeat_hint", True):
-            text += self._cfg_text("begin_repeat_text", "（本来就是开着的）")
+            text = self._repeat_reply("begin_repeat_text", "（本来就是开着的）")
+        else:
+            text = self._cfg_text("begin_text", "已启用输出")
         event.set_result(MessageEventResult().message(text))
         logger.info(
             f"[session_switch] 启用输出 umo={umo} by={event.get_sender_id()} "
