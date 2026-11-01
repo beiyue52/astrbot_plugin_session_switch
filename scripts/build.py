@@ -28,6 +28,7 @@ PACKAGE_FILES = (
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "requirements.txt",
 )
 
 errors: list[str] = []
@@ -71,7 +72,9 @@ def parse_metadata() -> dict:
 
     name = scalars.get("name", "")
     if name and name != PLUGIN_NAME:
-        errors.append(f"metadata.yaml 的 name ({name}) 必须与目录名 ({PLUGIN_NAME}) 一致")
+        errors.append(
+            f"metadata.yaml 的 name ({name}) 必须与目录名 ({PLUGIN_NAME}) 一致"
+        )
     if name and not name.isidentifier():
         errors.append(f"metadata.yaml 的 name ({name}) 必须是合法 Python 标识符")
 
