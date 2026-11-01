@@ -29,25 +29,55 @@
     "hint": "默认关闭。打开后第一次配置前任何人都能开关，建议先填好白名单再关掉这个",
     "default": false
   },
+  "end_command": {
+    "type": "string",
+    "description": "关闭输出的指令名",
+    "hint": "默认 end，即 /end。想改成 /闭嘴 就填「闭嘴」（不用带斜杠）。不能带空格，三个指令名不能重复。",
+    "default": "end"
+  },
+  "begin_command": {
+    "type": "string",
+    "description": "恢复输出的指令名",
+    "hint": "默认 begin，即 /begin。改成 /说话 就填「说话」。",
+    "default": "begin"
+  },
+  "status_command": {
+    "type": "string",
+    "description": "查看状态的指令名",
+    "hint": "默认 switch，即 /switch。改成 /状态 就填「状态」。",
+    "default": "switch"
+  },
   "end_text": {
     "type": "string",
-    "description": "/end 之后的回复内容",
+    "description": "关闭输出后的回复内容",
     "default": "已关闭输出"
   },
   "begin_text": {
     "type": "string",
-    "description": "/begin 之后的回复内容",
+    "description": "恢复输出后的回复内容",
     "default": "已启用输出"
   },
   "end_repeat_hint": {
     "type": "bool",
-    "description": "重复 /end 时追加提示「（本来就是关着的）」",
+    "description": "重复关闭时追加提示",
     "default": true
+  },
+  "end_repeat_text": {
+    "type": "string",
+    "description": "重复关闭时追加的那句话",
+    "hint": "仅在上一项打开时生效。会直接拼在 end_text 后面。",
+    "default": "（本来就是关着的）"
   },
   "begin_repeat_hint": {
     "type": "bool",
-    "description": "重复 /begin 时追加提示「（本来就是开着的）」",
+    "description": "重复恢复时追加提示",
     "default": true
+  },
+  "begin_repeat_text": {
+    "type": "string",
+    "description": "重复恢复时追加的那句话",
+    "hint": "仅在上一项打开时生效。会直接拼在 begin_text 后面。",
+    "default": "（本来就是开着的）"
   },
   "mute_block_proactive": {
     "type": "bool",

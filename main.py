@@ -11,12 +11,14 @@
 3. 白名单控制「谁有权用 /end 和 /begin」；不在名单里的人发指令只会收到一句拒绝提示（含自己的 UID，方便复制去配置）。
 4. 闭嘴期间**所有指令仍然可用**（/help、/begin 等照常），只是不再触发模型回复。
 5. 可选：连带拦截主动消息（主动消息类插件自己发的消息）。
+6. 三个指令的名字都能改（配置项 end_command / begin_command / status_command）。
 
 版本兼容：AstrBot >= 4.16,<5。缺失的钩子在旧版本上会自动降级，不会导致插件加载失败。
 """
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -24,13 +26,27 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
 from astrbot.api.star import Context, Star
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 KV_KEY = "muted_sessions"
 """插件 KV 存储里的键名。"""
 
 ALLOW_EXTRA = "_session_switch_allow"
 """事件标记：带这个标记的事件不拦截（用于放行 /end 自己的回执）。"""
+
+DEFAULT_COMMANDS = {
+    "end": "end",
+    "begin": "begin",
+    "switch": "switch",
+}
+"""三个指令的默认名字，也是配置项 end_command / begin_command / status_command 的兜底值。"""
+
+DEFAULT_ALIASES = {
+    "end": {"mute"},
+    "begin": {"unmute"},
+    "switch": {"mute_status"},
+}
+"""三个指令的固定别名。别名不可配置，但改名时要把它们算进冲突检测。"""
 
 
 def _hook(name: str):
@@ -67,6 +83,56 @@ def _result_is_model_output(result: Any) -> bool:
     return False
 
 
+def _normalize_command_name(raw: Any, default: str) -> str:
+    """把配置里的指令名洗干净：去掉前缀斜杠、空白和全角空格。
+
+    用户可能填 ``/闭嘴``、`` 闭嘴 ``、``／闭嘴`` 之类的写法，统一收敛成 ``闭嘴``。
+    清洗后为空或含空格/换行（AstrBot 不支持多词指令名）时退回默认值。
+    """
+    if not isinstance(raw, str):
+        return default
+    name = raw.strip().lstrip("/!！／").strip()
+    if not name or re.search(r"\s", name):
+        return default
+    return name
+
+
+def _locate_command_filter(handler: Any) -> Any:
+    """从 handler 的 event_filters 里找出主 CommandFilter。
+
+    用鸭子类型判断（有 ``command_name`` 和 ``alias`` 就是指令过滤器），
+    这样不依赖 AstrBot 内部的类名和 import 路径，跨版本更稳。
+    指令组（CommandGroupFilter）也满足这两个属性，故按类名排除。
+    """
+    for filter_obj in getattr(handler, "event_filters", None) or []:
+        if not hasattr(filter_obj, "command_name") or not hasattr(filter_obj, "alias"):
+            continue
+        if "Group" in type(filter_obj).__name__:
+            continue
+        return filter_obj
+    return None
+
+
+def _apply_command_name(handler: Any, name: str, alias: set[str] | None = None) -> bool:
+    """在运行时把某个 handler 的指令名（和别名）改掉。
+
+    做法与 AstrBot 自己的「指令管理」一致：直接改 CommandFilter 的
+    ``command_name`` / ``alias``，再把缓存 ``_cmpl_cmd_names`` 清空，
+    否则它还会用旧名字匹配。
+    """
+    filter_obj = _locate_command_filter(handler)
+    if filter_obj is None:
+        return False
+    try:
+        filter_obj.command_name = name
+        if alias is not None:
+            filter_obj.alias = set(alias)
+        filter_obj._cmpl_cmd_names = None
+    except Exception:  # noqa: BLE001 - 内部结构变化时静默跳过，不影响插件运行
+        return False
+    return True
+
+
 class SessionSwitchPlugin(Star):
     """按会话控制机器人是否说话。"""
 
@@ -79,7 +145,7 @@ class SessionSwitchPlugin(Star):
     # 生命周期
     # ------------------------------------------------------------------
     async def initialize(self) -> None:
-        """插件加载时从 KV 存储恢复闭嘴状态。"""
+        """插件加载时从 KV 存储恢复闭嘴状态，并把自定义指令名应用到运行时。"""
         data: Any = {}
         try:
             data = await self.get_kv_data(KV_KEY, {})
@@ -95,10 +161,45 @@ class SessionSwitchPlugin(Star):
         else:
             self._muted = {}
 
+        renamed = self._apply_command_names()
+
         logger.info(
             f"[session_switch] v{__version__} 已加载 enabled={self._enabled} "
-            f"静默会话数={len(self._muted)} 白名单数={len(self._whitelist)}"
+            f"静默会话数={len(self._muted)} 白名单数={len(self._whitelist)} "
+            f"指令={'/'.join(self._command_names.values())}"
+            + ("（已应用自定义指令名）" if renamed else "")
         )
+
+    def _apply_command_names(self) -> bool:
+        """把配置里的自定义指令名写到自己的 handler 上。
+
+        ``initialize()`` 在 handler 绑定之后、``sync_command_configs()`` 之前被调用，
+        此时改 filter 才能被后续的指令管理同步看到。找不到 registry 时静默跳过。
+        """
+        try:
+            from astrbot.core.star.star_handler import star_handlers_registry
+        except Exception:  # noqa: BLE001 - 老版本路径不同，跳过即可
+            return False
+
+        targets = {
+            "cmd_end": self._command_names["end"],
+            "cmd_begin": self._command_names["begin"],
+            "cmd_status": self._command_names["switch"],
+        }
+        applied = False
+        for handler in list(star_handlers_registry):
+            if getattr(handler, "handler_module_path", None) != __name__:
+                continue
+            raw = handler.handler
+            handler_name = getattr(raw, "__name__", "")
+            if not handler_name and hasattr(raw, "func"):
+                handler_name = getattr(raw.func, "__name__", "")
+            name = targets.get(handler_name)
+            if not name:
+                continue
+            if _apply_command_name(handler, name):
+                applied = True
+        return applied
 
     async def terminate(self) -> None:
         """插件卸载/重载前落盘一次，避免丢状态。"""
@@ -123,6 +224,45 @@ class SessionSwitchPlugin(Star):
         if isinstance(value, str) and value.strip():
             return value
         return default
+
+    @property
+    def _command_names(self) -> dict[str, str]:
+        """三个指令当前该用的名字。
+
+        配置项缺失、填了空白、或名字撞车时，全部退回默认名 —— 否则会出现
+        两个 handler 抢同一个指令，或者某个指令彻底不可用。
+
+        撞车检测要把别名一起算进去：别名是写死的、改不了，如果用户把 end 改名成
+        ``unmute``，那 begin 的别名和 end 的主名就会撞，两个 handler 抢同一条消息。
+        """
+        names = {
+            "end": _normalize_command_name(
+                self.config.get("end_command"), DEFAULT_COMMANDS["end"]
+            ),
+            "begin": _normalize_command_name(
+                self.config.get("begin_command"), DEFAULT_COMMANDS["begin"]
+            ),
+            "switch": _normalize_command_name(
+                self.config.get("status_command"), DEFAULT_COMMANDS["switch"]
+            ),
+        }
+        # 主名之间不能重复
+        if len(set(names.values())) != len(names):
+            logger.warning(
+                f"[session_switch] 自定义指令名有重复 {names}，本次全部使用默认指令名"
+            )
+            return dict(DEFAULT_COMMANDS)
+        # 主名也不能撞上别人的别名（别名不归用户配置，撞了只能退回默认）。
+        # 撞自己的别名无所谓：同一个 filter 里重复匹配两次，没有 handler 冲突。
+        for key, name in names.items():
+            for alias_owner, aliases in DEFAULT_ALIASES.items():
+                if alias_owner != key and name in aliases:
+                    logger.warning(
+                        f"[session_switch] 自定义指令名 {name!r}（{key}）与 "
+                        f"{alias_owner} 的别名冲突，本次全部使用默认指令名"
+                    )
+                    return dict(DEFAULT_COMMANDS)
+        return names
 
     # ------------------------------------------------------------------
     # 权限判定
@@ -217,7 +357,7 @@ class SessionSwitchPlugin(Star):
         event.set_extra(ALLOW_EXTRA, True)
         text = self._cfg_text("end_text", "已关闭输出")
         if already and self.config.get("end_repeat_hint", True):
-            text += "（本来就是关着的）"
+            text += self._cfg_text("end_repeat_text", "（本来就是关着的）")
         event.set_result(MessageEventResult().message(text))
         logger.info(
             f"[session_switch] 关闭输出 umo={umo} by={event.get_sender_id()} "
@@ -246,7 +386,7 @@ class SessionSwitchPlugin(Star):
         event.set_extra(ALLOW_EXTRA, True)
         text = self._cfg_text("begin_text", "已启用输出")
         if not was_muted and self.config.get("begin_repeat_hint", True):
-            text += "（本来就是开着的）"
+            text += self._cfg_text("begin_repeat_text", "（本来就是开着的）")
         event.set_result(MessageEventResult().message(text))
         logger.info(
             f"[session_switch] 启用输出 umo={umo} by={event.get_sender_id()} "
@@ -275,7 +415,7 @@ class SessionSwitchPlugin(Star):
             text = (
                 f"本会话当前：已关闭输出\n"
                 f"操作人：{info.get('by', '未知')}  时间：{when}\n"
-                f"发送 /begin 可以恢复。"
+                f"发送 /{self._command_names['begin']} 可以恢复。"
             )
         else:
             text = "本会话当前：正常输出"

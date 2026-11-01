@@ -1,12 +1,13 @@
 name: astrbot_plugin_session_switch
 display_name: 会话开关
 author: beiyue52
-version: 1.1.1
-short_desc: 按会话让机器人闭嘴 / 恢复说话，带白名单权限，静默期间指令照常可用
+version: 1.2.0
+short_desc: 按会话让机器人闭嘴 / 恢复说话，指令名和回复文案都能改，带白名单权限
 desc: |
   用 /end 让机器人闭嘴、/begin 恢复说话，按会话独立生效：在哪个群或私聊里关，就只关那一个。
   只在「要调模型」和「要发消息」两处掐断，所以静默期消息照收、指令照用、不烧 token，群聊上下文照常累积，/begin 后能接上前文。
-  状态存插件 KV，重启不丢；权限支持白名单、管理员、所有人；/switch 查本会话状态。需要 AstrBot 4.16 及以上。
+  三个指令名和所有回复文案都能在配置里改（比如把 /end 改成 /闭嘴）；状态存插件 KV，重启不丢；权限支持白名单、管理员、所有人。需要 AstrBot 4.16 及以上。
+  改指令名别和 AstrBot「指令管理」两边同时用，那边存在数据库里、优先级更高。
 repo: https://github.com/beiyue52/astrbot_plugin_session_switch
 astrbot_version: ">=4.16,<5"
 support_platforms:

@@ -3,6 +3,21 @@
 本项目的所有重要变更都会记录在这里。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-11-01
+
+### 新增
+
+- 新增 `end_command` / `begin_command` / `status_command` 配置，三个指令名都能改，比如把 `/end` 改成 `/闭嘴`。填的时候带不带斜杠都行。
+- 新增 `end_repeat_text` / `begin_repeat_text` 配置，重复操作时追加的那句话可以自定义。
+
+### 变更
+
+- 自定义指令名会在 `initialize()` 里直接应用到运行时，与 AstrBot「指令管理」的改名走同一套手法，保存配置热重载后立即生效。
+- 指令名清洗规则：去掉前缀斜杠和空白；含空格、为空、或三个名字重复时退回默认值并在日志里 warning。
+- 自定义指令名撞上别的指令的内置别名（`mute` / `unmute` / `mute_status`）时也退回默认，避免两个 handler 抢同一条消息。
+- `/switch` 的提示语跟随自定义的恢复指令名，不再硬编码 `/begin`。
+- `initialize()` 日志补上当前生效的指令名。
+
 ## [1.1.1] - 2026-10-30
 
 ### 变更

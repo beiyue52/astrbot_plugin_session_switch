@@ -329,6 +329,139 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     asyncio.run(plugin7.initialize())
     check("KV 脏数据被过滤", list(plugin7._muted) == ["ok"], str(plugin7._muted))
 
+    # 自定义指令名：默认值
+    check(
+        "默认指令名",
+        plugin._command_names == {"end": "end", "begin": "begin", "switch": "switch"},
+        str(plugin._command_names),
+    )
+
+    # 自定义指令名：带斜杠、空格、全角空格都要洗干净
+    p_cmd = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(end_command="/闭嘴", begin_command="  说话  ", status_command="／状态"),
+    )
+    check(
+        "指令名清洗（去斜杠和空白）",
+        p_cmd._command_names
+        == {"end": "闭嘴", "begin": "说话", "switch": "状态"},
+        str(p_cmd._command_names),
+    )
+
+    # 自定义指令名：空白/多词/非字符串一律退回默认
+    p_bad = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(end_command="   ", begin_command="恢复 输出", status_command=123),
+    )
+    check(
+        "非法指令名退回默认",
+        p_bad._command_names == {"end": "end", "begin": "begin", "switch": "switch"},
+        str(p_bad._command_names),
+    )
+
+    # 自定义指令名：撞车时全部退回默认，避免两个 handler 抢同一个指令
+    p_dup = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(end_command="闭嘴", begin_command="闭嘴"),
+    )
+    check(
+        "指令名重复时退回默认",
+        p_dup._command_names == {"end": "end", "begin": "begin", "switch": "switch"},
+        str(p_dup._command_names),
+    )
+
+    # 自定义指令名撞上内置别名：别名是写死的，主名抢了别名会让两个 handler 抢消息
+    p_alias = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(end_command="unmute"),
+    )
+    check(
+        "指令名撞内置别名时退回默认",
+        p_alias._command_names == {"end": "end", "begin": "begin", "switch": "switch"},
+        str(p_alias._command_names),
+    )
+
+    # 运行时改名：直接作用在 CommandFilter 上，并清掉匹配缓存
+    class _FakeCommandFilter:
+        def __init__(self):
+            self.command_name = "end"
+            self.alias = {"mute"}
+            self._cmpl_cmd_names = ["end", "mute"]
+
+    class _FakeHandler:
+        def __init__(self):
+            self.event_filters = [_FakeCommandFilter()]
+
+    fake = _FakeHandler()
+    changed = module._apply_command_name(fake, "闭嘴", alias=set())
+    check("运行时改名成功", changed is True)
+    check("command_name 已改", fake.event_filters[0].command_name == "闭嘴")
+    check("别名已清空", fake.event_filters[0].alias == set())
+    check("匹配缓存已失效", fake.event_filters[0]._cmpl_cmd_names is None)
+
+    # 运行时改名：没有 CommandFilter 时安全返回 False
+    class _EmptyHandler:
+        event_filters = []
+
+    check("无指令过滤器时安全跳过", module._apply_command_name(_EmptyHandler(), "x") is False)
+
+    # 自定义重复提示语
+    p_hint = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(
+            whitelist=["1001"],
+            end_text="好",
+            end_repeat_text="（已经关过了）",
+            begin_text="行",
+            begin_repeat_text="（一直开着呢）",
+        ),
+    )
+    ev_h1 = Event(sender="1001", umo="aiocqhttp:GroupMessage:7")
+    asyncio.run(p_hint.cmd_begin(ev_h1))
+    check(
+        "重复恢复用自定义提示语",
+        "".join(ev_h1.get_result().texts) == "行（一直开着呢）",
+        "".join(ev_h1.get_result().texts),
+    )
+    ev_h2 = Event(sender="1001", umo="aiocqhttp:GroupMessage:7")
+    asyncio.run(p_hint.cmd_end(ev_h2))
+    ev_h3 = Event(sender="1001", umo="aiocqhttp:GroupMessage:7")
+    asyncio.run(p_hint.cmd_end(ev_h3))
+    check(
+        "重复关闭用自定义提示语",
+        "".join(ev_h3.get_result().texts) == "好（已经关过了）",
+        "".join(ev_h3.get_result().texts),
+    )
+
+    # 关掉追加提示后，重复操作只回主文案
+    p_nohint = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(whitelist=["1001"], end_repeat_hint=False, end_text="好"),
+    )
+    asyncio.run(p_nohint.cmd_end(Event(sender="1001", umo="aiocqhttp:GroupMessage:8")))
+    ev_n = Event(sender="1001", umo="aiocqhttp:GroupMessage:8")
+    asyncio.run(p_nohint.cmd_end(ev_n))
+    check(
+        "关掉追加提示后不加尾巴",
+        "".join(ev_n.get_result().texts) == "好",
+        "".join(ev_n.get_result().texts),
+    )
+
+    # /switch 的提示语跟随自定义的 begin 指令名
+    p_sw = module.SessionSwitchPlugin(
+        context=modules["astrbot.api.star"].Context(),
+        config=Config(whitelist=["1001"], begin_command="说话"),
+    )
+    ev_sw = Event(sender="1001", umo="aiocqhttp:GroupMessage:6")
+    asyncio.run(p_sw.cmd_end(ev_sw))
+    ev_sw2 = Event(sender="1001", umo="aiocqhttp:GroupMessage:6")
+    asyncio.run(p_sw.cmd_status(ev_sw2))
+    check(
+        "状态提示用自定义 begin 指令名",
+        "/说话" in "".join(ev_sw2.get_result().texts),
+        "".join(ev_sw2.get_result().texts),
+    )
+
 
 def main() -> int:
     run_cases("当前版本（钩子齐全 + is_model_result）")
