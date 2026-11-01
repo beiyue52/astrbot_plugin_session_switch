@@ -53,6 +53,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/astrbot_plugin_session_switch.zip
+          body_path: dist/release-notes.md
           generate_release_notes: true
           draft: false
         env:

@@ -112,6 +112,19 @@
 
 ---
 
+## 更新说明
+
+| 版本 | 主要变化 |
+|---|---|
+| `1.2.0` | 三个指令名和重复提示语都能自定义（`end_command` / `begin_command` / `status_command` / `end_repeat_text` / `begin_repeat_text`） |
+| `1.1.1` | 文档整理 |
+| `1.1.0` | 新增 `/switch` 查状态、`mute_block_proactive` 拦主动消息、钩子降级兼容 4.16+ |
+| `1.0.0` | 首个版本：按会话闭嘴 / 恢复，状态存 KV |
+
+完整记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
 ## 开发
 
 入口是 `main.py` 的 `SessionSwitchPlugin`，继承 `astrbot.api.star.Star`（v3.5.19 之后不需要 `@register`）。改完代码跑这两条：

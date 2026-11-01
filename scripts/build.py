@@ -128,6 +128,32 @@ def check_main_py() -> None:
             errors.append(f"main.py 未引用钩子 {hook}")
 
 
+def extract_changelog_section(version: str) -> str:
+    """从 CHANGELOG.md 里取出指定版本那一节，供 Release Notes 使用。"""
+    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"^##\s*\[?{re.escape(version)}\]?.*?$(.*?)(?=^##\s|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    match = pattern.search(text)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def build_release_notes(version: str) -> Path | None:
+    section = extract_changelog_section(version)
+    if not section:
+        print(f"提示: CHANGELOG.md 里找不到 {version} 的条目，跳过 Release Notes")
+        return None
+    dist = ROOT / "dist"
+    dist.mkdir(exist_ok=True)
+    target = dist / "release-notes.md"
+    target.write_text(section + "\n", encoding="utf-8")
+    print(f"Release Notes 已生成: {target} ({len(section)} 字符)")
+    return target
+
+
 def build_zip() -> Path:
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
@@ -142,7 +168,7 @@ def build_zip() -> Path:
 
 def main() -> int:
     schema = check_schema()
-    parse_metadata()
+    metadata = parse_metadata()
     if schema:
         check_readme(schema)
     check_files()
@@ -156,6 +182,9 @@ def main() -> int:
 
     if "--check" not in sys.argv:
         build_zip()
+        version = metadata.get("version", "")
+        if version:
+            build_release_notes(version)
     print("\n全部通过")
     return 0
 
