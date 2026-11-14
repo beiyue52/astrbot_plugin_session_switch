@@ -3,7 +3,7 @@
 用 `/end` 让机器人闭嘴、`/begin` 让她恢复说话。**按会话独立生效** —— 在哪个群关，就只关那一个，别的群和私聊照常聊天。状态存插件 KV，重启不丢。**指令名可以自定义**，想叫 `/闭嘴` 就叫 `/闭嘴`。
 
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.16%2C%3C5-blue)](https://github.com/AstrBotDevs/AstrBot)
-[![version](https://img.shields.io/badge/version-1.2.1-green)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.3.0-green)](CHANGELOG.md)
 [![license](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
 
 ---
@@ -38,7 +38,7 @@
 装完重载插件，日志出现这行就算起来了：
 
 ```
-[session_switch] v1.2.1 已加载 enabled=True 静默会话数=0 白名单数=1 指令=end/begin/switch
+[session_switch] v1.3.0 已加载 enabled=True 静默会话数=0 白名单数=1 指令=end/begin/switch
 ```
 
 ---
@@ -127,7 +127,7 @@
 
 | 版本 | 主要变化 |
 |---|---|
-| 未发布 | 限时静音：支持自定义时长、指令、别名和重启续计；回执显示时长、到期发送恢复文案均可配置 |
+| `1.3.0` | 限时静音：支持自定义时长、指令、别名和重启续计；回执显示时长、到期发送恢复文案均可配置 |
 | `1.2.1` | 修复了重复开启/关闭指令的反馈输出，不再跟开启/关闭指令的反馈输出相连 |
 | `1.2.0` | 三个指令名和重复提示语都能自定义（`end_command` / `begin_command` / `status_command` / `end_repeat_text` / `begin_repeat_text`） |
 | `1.1.1` | 文档整理 |
