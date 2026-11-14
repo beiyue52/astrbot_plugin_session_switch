@@ -57,6 +57,18 @@
     "description": "恢复输出后的回复内容",
     "default": "已启用输出"
   },
+  "timed_mute_show_duration": {
+    "type": "bool",
+    "description": "限时静音回执显示时长",
+    "hint": "默认关闭，只回复 end_text。打开后在关闭文案后加上多久自动恢复，不影响 /switch 查看剩余时间。",
+    "default": false
+  },
+  "timed_mute_notify_on_expire": {
+    "type": "bool",
+    "description": "限时静音到期发送恢复文案",
+    "hint": "默认关闭。打开后到期向原会话发送 begin_text，与恢复指令的回复内容相同。手动恢复不重复提醒，停机期间已到期的不补发；需要平台支持主动消息。",
+    "default": false
+  },
   "end_repeat_hint": {
     "type": "bool",
     "description": "重复关闭时给出提示",

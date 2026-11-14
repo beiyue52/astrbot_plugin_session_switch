@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import sys
 import types
+from copy import deepcopy
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -49,10 +51,17 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
     event_mod.__path__ = []
 
     class AstrMessageEvent:
-        def __init__(self, umo="aiocqhttp:GroupMessage:1", sender="1001", admin=False):
+        def __init__(
+            self,
+            umo="aiocqhttp:GroupMessage:1",
+            sender="1001",
+            admin=False,
+            message="/end",
+        ):
             self._umo = umo
             self._sender = sender
             self._admin = admin
+            self._message = message
             self._extras: dict = {}
             self._result = None
             self._stopped = False
@@ -63,6 +72,9 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
 
         def get_sender_id(self):
             return self._sender
+
+        def get_message_str(self):
+            return self._message
 
         def get_group_id(self):
             return self._umo.rsplit(":", 1)[-1] if "GroupMessage" in self._umo else None
@@ -121,7 +133,7 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
     event_mod.ResultContentType = ResultContentType
     event_mod.CommandResult = MessageEventResult
     event_mod.EventResultType = object
-    event_mod.MessageChain = object
+    event_mod.MessageChain = MessageEventResult
 
     # --- astrbot.api.event.filter ---
     filter_mod = types.ModuleType("astrbot.api.event.filter")
@@ -171,7 +183,12 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
     star_mod.__path__ = []
 
     class Context:
-        pass
+        def __init__(self):
+            self.sent_messages = []
+
+        async def send_message(self, session, message_chain):
+            self.sent_messages.append((session, message_chain))
+            return True
 
     class Star:
         def __init__(self, context, config=None):
@@ -179,10 +196,10 @@ def build_stub(*, with_waiting_hook: bool = True, with_is_model_result: bool = T
             self._kv: dict = {}
 
         async def get_kv_data(self, key, default=None):
-            return self._kv.get(key, default)
+            return deepcopy(self._kv.get(key, default))
 
         async def put_kv_data(self, key, value):
-            self._kv[key] = value
+            self._kv[key] = deepcopy(value)
 
     star_mod.Context = Context
     star_mod.Star = Star
@@ -522,10 +539,554 @@ def run_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
     )
 
 
+def run_timed_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
+    print(f"\n=== {label}：限时静音 ===")
+    modules, Event, Result, ContentType, Config = build_stub(
+        with_waiting_hook=with_waiting_hook, with_is_model_result=with_is_model_result
+    )
+    module = load_plugin(modules, ROOT / "main.py")
+
+    for raw, expected in (
+        ("", None),
+        ("  ", None),
+        ("90s", 90),
+        ("17m", 1020),
+        ("5h", 18000),
+        ("3d", 259200),
+        (" 2H ", 7200),
+        ("30d", module.MAX_MUTE_SECONDS),
+        ("2592000s", module.MAX_MUTE_SECONDS),
+    ):
+        check(f"时长解析 {raw!r}", module._parse_duration(raw) == expected)
+
+    invalid = (
+        "0s",
+        "-1m",
+        "+1m",
+        "1.5h",
+        "30",
+        "1w",
+        "31d",
+        "2592001s",
+        "999999999999999999999h",
+        "1h 30m",
+        "30 m",
+        "30m 多余参数",
+        "nan",
+        "１m",
+    )
+    for raw in invalid:
+        try:
+            module._parse_duration(raw)
+        except ValueError:
+            rejected = True
+        else:
+            rejected = False
+        check(f"拒绝非法时长 {raw!r}", rejected)
+
+    async def cases():
+        plugins = []
+
+        def make_plugin(**config):
+            cfg = {"whitelist": ["1001"]}
+            cfg.update(config)
+            plugin = module.SessionSwitchPlugin(
+                context=modules["astrbot.api.star"].Context(), config=Config(cfg)
+            )
+            plugins.append(plugin)
+            return plugin
+
+        def text(event):
+            return "".join(event.get_result().texts)
+
+        try:
+            with patch.object(module.time, "time", return_value=1800000000.25) as clock:
+                plugin = make_plugin(
+                    end_command="闭嘴",
+                    begin_command="说话",
+                    status_command="状态",
+                    end_text="好",
+                    end_repeat_text="（已经关过了）",
+                    timed_mute_show_duration=True,
+                )
+                await plugin.initialize()
+                ev = Event(message="/闭嘴 17m")
+                umo = ev.unified_msg_origin
+                await plugin.cmd_end(ev, duration_text="17m")
+                original_info = deepcopy(plugin._muted[umo])
+                original_task = plugin._expiry_tasks[umo]
+                deadline = clock.return_value + 1020
+                check(
+                    "自定义关闭指令可设置任意分钟数",
+                    original_info["expires_at"] == deadline,
+                )
+                check(
+                    "限时回执保留自定义文案并显示时长",
+                    text(ev) == "好\n将在 17 分钟后自动恢复。",
+                )
+                check("限时回执带放行标记", ev.get_extra(module.ALLOW_EXTRA) is True)
+                check(
+                    "限时静音保存绝对到期时间",
+                    plugin._kv[module.KV_KEY][umo] == original_info,
+                )
+                check(
+                    "限时静音不影响其他会话", not plugin._is_muted(Event(umo="other"))
+                )
+                status = Event(message="/状态")
+                await plugin.cmd_status(status)
+                check(
+                    "状态显示剩余时间和自定义恢复指令",
+                    "剩余：17 分钟" in text(status) and "/说话" in text(status),
+                )
+
+                restarted = make_plugin()
+                restarted._kv = deepcopy(plugin._kv)
+                clock.return_value += 10
+                await restarted.initialize()
+                check(
+                    "重启沿用原到期时间，不重新计时",
+                    restarted._muted[umo]["expires_at"] == deadline,
+                )
+                check("重启重新安排计时任务", umo in restarted._expiry_tasks)
+
+                for raw in invalid:
+                    bad = Event(message=f"/闭嘴 {raw}")
+                    await plugin.cmd_end(bad, duration_text=raw)
+                    check(
+                        f"非法参数不改变现有静音 {raw!r}",
+                        plugin._muted[umo] == original_info
+                        and plugin._expiry_tasks[umo] is original_task,
+                    )
+                    check(f"非法参数提示自定义指令 {raw!r}", "/闭嘴 30m" in text(bad))
+
+                denied = Event(sender="2002", message="/闭嘴 2h")
+                await plugin.cmd_end(denied, duration_text="2h")
+                check(
+                    "无权限不能重设计时",
+                    plugin._muted[umo] == original_info and "没有权限" in text(denied),
+                )
+                disabled = make_plugin(enabled=False)
+                await disabled.cmd_end(Event(message="/end 2h"), duration_text="2h")
+                check(
+                    "插件停用时不能设置计时",
+                    not disabled._muted and not disabled._expiry_tasks,
+                )
+
+                reset = Event(message="/mute 90s")
+                await plugin.cmd_end(reset, duration_text="90s")
+                replacement_task = plugin._expiry_tasks[umo]
+                await asyncio.gather(original_task, return_exceptions=True)
+                check(
+                    "别名支持时长并从本次操作重新计时",
+                    plugin._muted[umo]["expires_at"] == clock.return_value + 90,
+                )
+                check(
+                    "重设计时取消旧任务且保留新任务",
+                    original_task.cancelled()
+                    and plugin._expiry_tasks[umo] is replacement_task,
+                )
+                check(
+                    "重设计时回执明确显示新时长",
+                    "1 分钟 30 秒" in text(reset) and "已经关过" not in text(reset),
+                )
+                # 即使旧任务晚一步执行，也不能解除新的静音。
+                await plugin._resume_after(umo, original_info)
+                check(
+                    "旧任务不会误解除新的静音",
+                    plugin._is_muted(Event())
+                    and plugin._expiry_tasks[umo] is replacement_task,
+                )
+
+                permanent = Event(message="/闭嘴")
+                await plugin.cmd_end(permanent)
+                await asyncio.gather(replacement_task, return_exceptions=True)
+                check(
+                    "不带时长可改为一直静音并取消计时",
+                    "expires_at" not in plugin._muted[umo]
+                    and umo not in plugin._expiry_tasks,
+                )
+                check(
+                    "不带时长的重复关闭仍只回自定义重复提示",
+                    text(permanent) == "（已经关过了）",
+                )
+                check("旧版静音记录不受影响", plugin._is_muted(Event()))
+
+                await plugin.cmd_end(Event(message="/闭嘴 5h"), duration_text="5h")
+                manual_task = plugin._expiry_tasks[umo]
+                begin = Event(message="/说话")
+                await plugin.cmd_begin(begin)
+                await asyncio.gather(manual_task, return_exceptions=True)
+                check(
+                    "手动恢复取消计时并清除持久化状态",
+                    manual_task.cancelled()
+                    and umo not in plugin._expiry_tasks
+                    and not plugin._kv[module.KV_KEY],
+                )
+                check("手动恢复使用原有回执", text(begin) == "已启用输出")
+
+                await plugin.cmd_end(Event(message="/闭嘴 90s"), duration_text="90s")
+                task = plugin._expiry_tasks[umo]
+                expires_at = plugin._muted[umo]["expires_at"]
+                clock.return_value = expires_at - 0.1
+                check("到期前仍然静音", plugin._is_muted(Event()))
+                clock.return_value = expires_at
+                for hook in (
+                    plugin.block_waiting_llm_request,
+                    plugin.block_llm_request,
+                    plugin.block_decorating_result,
+                ):
+                    event = Event()
+                    event.set_result(Result(ContentType.LLM_RESULT))
+                    await hook(event)
+                    check(f"到期边界立即放行 {hook.__name__}", not event.is_stopped())
+                ended = Event(message="/状态")
+                await plugin.cmd_status(ended)
+                check(
+                    "到期后状态立即显示正常输出", text(ended) == "本会话当前：正常输出"
+                )
+                await task
+                check(
+                    "计时到期清除内存、KV 和任务",
+                    not plugin._muted
+                    and not plugin._kv[module.KV_KEY]
+                    and not plugin._expiry_tasks,
+                )
+
+                # 框架先匹配命令、保存参数，其他处理器可能在调用命令前修改消息全文。
+                native = make_plugin(end_command="闭嘴", timed_mute_show_duration=True)
+                for message, duration_text, seconds in (
+                    ("闭嘴 10m [MSG_ID:12345]", "10m", 600),
+                    ("闭嘴 100s [MSG_ID:12345]", "100s", 100),
+                    ("@机器人 /闭嘴 10m [MSG_ID:12345]", "10m", 600),
+                    ("[引用消息] 闭嘴 100s", "100s", 100),
+                ):
+                    event = Event(message=message)
+                    await native.cmd_end(event, duration_text=duration_text)
+                    check(
+                        f"消息被增强后仍使用框架参数 {message!r}",
+                        native._muted[umo]["expires_at"] == clock.return_value + seconds
+                        and "自动恢复" in text(event),
+                    )
+                before = deepcopy(native._muted[umo])
+                extra = Event(message="闭嘴 1h 30m [MSG_ID:12345]")
+                await native.cmd_end(extra, duration_text="1h", extra="30m")
+                check(
+                    "框架传入多余参数时拒绝操作，不改变状态",
+                    native._muted[umo] == before and "格式不对" in text(extra),
+                )
+                await native.cmd_end(Event(message="闭嘴 [MSG_ID:12345]"))
+                check(
+                    "不带时长时不把消息附加信息误作参数",
+                    "expires_at" not in native._muted[umo]
+                    and umo not in native._expiry_tasks,
+                )
+
+                startup = make_plugin()
+                startup._kv = {
+                    module.KV_KEY: {
+                        "expired": {
+                            "by": "1001",
+                            "at": 1,
+                            "expires_at": clock.return_value - 1,
+                        },
+                        "active": {
+                            "by": "1001",
+                            "at": 1,
+                            "expires_at": clock.return_value + 3600,
+                        },
+                        "legacy": {"by": "1001", "at": 1},
+                        "bad_expiry": {"expires_at": "坏数据"},
+                        "bad_record": "坏数据",
+                    }
+                }
+                await startup.initialize()
+                check(
+                    "启动清理停机期间到期的记录并落盘",
+                    "expired" not in startup._muted
+                    and "expired" not in startup._kv[module.KV_KEY],
+                )
+                check(
+                    "启动保留未到期、旧版和损坏到期字段的记录",
+                    set(startup._muted) == {"active", "legacy", "bad_expiry"},
+                )
+                check(
+                    "只给有效的限时记录安排任务",
+                    set(startup._expiry_tasks) == {"active"},
+                )
+                startup_tasks = list(startup._expiry_tasks.values())
+                await startup.terminate()
+                check(
+                    "卸载取消全部任务但保留未到期状态",
+                    not startup._expiry_tasks
+                    and all(t.done() for t in startup_tasks)
+                    and "active" in startup._kv[module.KV_KEY],
+                )
+
+            # 真正让事件循环等待到期，覆盖任务休眠和自动唤醒，不依赖消息触发。
+            live = make_plugin(timed_mute_notify_on_expire=True, begin_text="继续说吧")
+            await live.cmd_end(Event(message="/end 1s"), duration_text="1s")
+            await asyncio.wait_for(live._expiry_tasks[umo], timeout=3)
+            check(
+                "没有新消息时也会在到期后自动恢复",
+                not live._muted
+                and not live._kv[module.KV_KEY]
+                and not live._expiry_tasks,
+            )
+            check(
+                "没有新消息时到期也会发送自定义恢复文案",
+                [
+                    (session, "".join(chain.texts))
+                    for session, chain in live.context.sent_messages
+                ]
+                == [(umo, "继续说吧")],
+            )
+
+            # 模拟持久化变慢：第二次状态变更不能被较早发起的保存覆盖。
+            concurrent = make_plugin()
+            started = asyncio.Event()
+            release = asyncio.Event()
+            writes = []
+
+            async def delayed_put(key, value):
+                writes.append(deepcopy(value))
+                if len(writes) == 1:
+                    started.set()
+                    await release.wait()
+                concurrent._kv[key] = deepcopy(value)
+
+            concurrent.put_kv_data = delayed_put
+            first = asyncio.create_task(concurrent.cmd_end(Event(umo="first")))
+            await started.wait()
+            second = asyncio.create_task(concurrent.cmd_end(Event(umo="second")))
+            await asyncio.sleep(0)
+            release.set()
+            await asyncio.gather(first, second)
+            check("保存使用独立快照", set(writes[0]) == {"first"})
+            check(
+                "并发状态变更串行落盘，最终状态不丢",
+                len(writes) == 2
+                and set(concurrent._kv[module.KV_KEY]) == {"first", "second"},
+            )
+        finally:
+            for plugin in reversed(plugins):
+                await plugin.terminate()
+
+    asyncio.run(cases())
+
+
+def run_timed_reply_cases(label, *, with_waiting_hook=True, with_is_model_result=True):
+    print(f"\n=== {label}：限时静音回复配置 ===")
+    modules, Event, _, _, Config = build_stub(
+        with_waiting_hook=with_waiting_hook, with_is_model_result=with_is_model_result
+    )
+    module = load_plugin(modules, ROOT / "main.py")
+
+    async def cases():
+        plugins = []
+        umo = Event().unified_msg_origin
+
+        def make_plugin(**config):
+            plugin = module.SessionSwitchPlugin(
+                modules["astrbot.api.star"].Context(),
+                Config(whitelist=["1001"], **config),
+            )
+            plugins.append(plugin)
+            return plugin
+
+        def sent(plugin):
+            return [
+                (session, "".join(chain.texts))
+                for session, chain in plugin.context.sent_messages
+            ]
+
+        async def expire(plugin, session=umo):
+            # 将到期时间提前，重新安排任务；真实等待另有用例覆盖。
+            task = plugin._expiry_tasks[session]
+            plugin._cancel_expiry(session)
+            await asyncio.gather(task, return_exceptions=True)
+            plugin._muted[session]["expires_at"] = module.time.time()
+            plugin._schedule_expiry(session)
+            await plugin._expiry_tasks[session]
+
+        try:
+            for options in ({}, {"timed_mute_show_duration": False}):
+                plugin = make_plugin(end_text="好", **options)
+                event = Event(message="/end 10m")
+                await plugin.cmd_end(event, duration_text="10m")
+                check(
+                    f"时长显示默认或显式关闭时只回自定义文案 {options!r}",
+                    "".join(event.get_result().texts) == "好"
+                    and event.get_extra(module.ALLOW_EXTRA) is True,
+                )
+                plugin.config["timed_mute_show_duration"] = True
+                await plugin.cmd_end(event, duration_text="90s")
+                check(
+                    "打开时长显示后重设计时仍保留自定义文案",
+                    "".join(event.get_result().texts)
+                    == "好\n将在 1 分钟 30 秒后自动恢复。",
+                )
+                plugin.config["timed_mute_show_duration"] = False
+                await plugin.cmd_end(event, duration_text="10m")
+                check(
+                    "再次关闭时长显示立即生效",
+                    "".join(event.get_result().texts) == "好",
+                )
+                await expire(plugin)
+                check("到期默认不发送提醒", sent(plugin) == [])
+
+            for options in ({}, {"timed_mute_notify_on_expire": False}):
+                quiet = make_plugin(**options)
+                await quiet.cmd_end(Event(), duration_text="10m")
+                await expire(quiet)
+                check("关闭到期提醒仍正常恢复", not quiet._muted and sent(quiet) == [])
+
+            notify = make_plugin(
+                end_command="闭嘴",
+                begin_command="说话",
+                begin_text="继续说吧",
+                begin_repeat_text="一直开着呢",
+                timed_mute_notify_on_expire=True,
+            )
+            private = "aiocqhttp:FriendMessage:1001"
+            for session in (umo, private):
+                await notify.cmd_end(Event(umo=session), duration_text="10m")
+            await expire(notify)
+            check(
+                "到期只向原会话发送自定义恢复文案，不用重复提示语",
+                sent(notify) == [(umo, "继续说吧")]
+                and notify._is_muted(Event(umo=private)),
+            )
+            notify.config["begin_text"] = "现在可以聊了"
+            await expire(notify, private)
+            check(
+                "私聊到期使用当前配置的恢复文案",
+                sent(notify) == [(umo, "继续说吧"), (private, "现在可以聊了")]
+                and not notify._kv[module.KV_KEY],
+            )
+
+            for begin_text in (None, "  "):
+                fallback = make_plugin(
+                    timed_mute_notify_on_expire=True, begin_text=begin_text
+                )
+                await fallback.cmd_end(Event(), duration_text="10m")
+                await expire(fallback)
+                check(
+                    "到期文案缺失或空白时沿用恢复指令兜底",
+                    sent(fallback) == [(umo, "已启用输出")],
+                )
+
+            manual = make_plugin(
+                timed_mute_notify_on_expire=True, begin_text="继续说吧"
+            )
+            await manual.cmd_end(Event(), duration_text="10m")
+            task = manual._expiry_tasks[umo]
+            begin = Event(message="/begin")
+            await manual.cmd_begin(begin)
+            await asyncio.gather(task, return_exceptions=True)
+            check(
+                "手动恢复仍回自定义文案且不会重复发到期提醒",
+                "".join(begin.get_result().texts) == "继续说吧"
+                and sent(manual) == []
+                and not manual._expiry_tasks,
+            )
+
+            reset = make_plugin(timed_mute_notify_on_expire=True)
+            await reset.cmd_end(Event(), duration_text="10m")
+            old_task = reset._expiry_tasks[umo]
+            await reset.cmd_end(Event(), duration_text="20m")
+            await asyncio.gather(old_task, return_exceptions=True)
+            check("重设计时取消旧提醒", old_task.cancelled() and sent(reset) == [])
+            await expire(reset)
+            check(
+                "重设计时后仅在新计时到期时提醒一次",
+                sent(reset) == [(umo, "已启用输出")],
+            )
+            await reset.cmd_end(Event(), duration_text="10m")
+            old_task = reset._expiry_tasks[umo]
+            await reset.cmd_end(Event())
+            await asyncio.gather(old_task, return_exceptions=True)
+            check(
+                "改为长期静音不会残留到期提醒",
+                old_task.cancelled()
+                and not reset._expiry_tasks
+                and reset._is_muted(Event())
+                and len(sent(reset)) == 1,
+            )
+
+            restored = make_plugin(
+                timed_mute_notify_on_expire=True, begin_text="继续说吧"
+            )
+            await restored.cmd_end(Event(), duration_text="10m")
+            await restored.terminate()
+            reloaded = make_plugin(
+                timed_mute_notify_on_expire=True, begin_text="继续说吧"
+            )
+            reloaded._kv = deepcopy(restored._kv)
+            await reloaded.initialize()
+            await expire(reloaded)
+            check(
+                "重载后未到期记录仍能发送自定义恢复文案",
+                sent(reloaded) == [(umo, "继续说吧")],
+            )
+
+            offline = make_plugin(timed_mute_notify_on_expire=True)
+            offline._kv = {module.KV_KEY: {umo: {"expires_at": module.time.time() - 1}}}
+            await offline.initialize()
+            check(
+                "停机期间已到期的记录不补发提醒",
+                not offline._muted and sent(offline) == [],
+            )
+
+            disabled = make_plugin(timed_mute_notify_on_expire=True)
+            await disabled.cmd_end(Event(), duration_text="10m")
+            disabled.config["enabled"] = False
+            await expire(disabled)
+            check(
+                "插件停用后到期不发提醒", not disabled._muted and sent(disabled) == []
+            )
+
+            toggled = make_plugin(timed_mute_notify_on_expire=True)
+            await toggled.cmd_end(Event(), duration_text="10m")
+            toggled.config["timed_mute_notify_on_expire"] = False
+            await expire(toggled)
+            check("计时中关闭到期提醒立即生效", sent(toggled) == [])
+
+            for send_result in (RuntimeError("模拟发送失败"), False):
+                failed = make_plugin(timed_mute_notify_on_expire=True)
+                if isinstance(send_result, Exception):
+                    failed.context.send_message = AsyncMock(side_effect=send_result)
+                else:
+                    failed.context.send_message = AsyncMock(return_value=send_result)
+                await failed.cmd_end(Event(), duration_text="10m")
+                await expire(failed)
+                check(
+                    "提醒发送异常或平台不可用不影响恢复，不重复发送",
+                    not failed._muted
+                    and not failed._kv[module.KV_KEY]
+                    and not failed._expiry_tasks
+                    and failed.context.send_message.await_count == 1,
+                )
+        finally:
+            for plugin in reversed(plugins):
+                await plugin.terminate()
+
+    asyncio.run(cases())
+
+
 def main() -> int:
     run_cases("当前版本（钩子齐全 + is_model_result）")
     run_cases("旧版本（无 on_waiting_llm_request）", with_waiting_hook=False)
     run_cases("4.24.4 之前（无 is_model_result）", with_is_model_result=False)
+    run_timed_cases("当前版本（钩子齐全 + is_model_result）")
+    run_timed_cases("旧版本（无 on_waiting_llm_request）", with_waiting_hook=False)
+    run_timed_cases("4.24.4 之前（无 is_model_result）", with_is_model_result=False)
+    run_timed_reply_cases("当前版本（钩子齐全 + is_model_result）")
+    run_timed_reply_cases(
+        "旧版本（无 on_waiting_llm_request）", with_waiting_hook=False
+    )
+    run_timed_reply_cases(
+        "4.24.4 之前（无 is_model_result）", with_is_model_result=False
+    )
 
     print()
     if failures:

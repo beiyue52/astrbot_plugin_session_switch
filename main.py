@@ -2,6 +2,7 @@
 
 用法（默认唤醒前缀 /）：
     /end      让本会话闭嘴（机器人回一句「已关闭输出」，之后不再回复任何内容）
+    /end 30m  让本会话闭嘴 30 分钟，到期自动恢复（支持 s/m/h/d）
     /begin    恢复本会话说话（机器人回一句「已启用输出」）
     /switch   查看本会话当前状态
 
@@ -18,18 +19,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
 import re
 import time
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, filter
 from astrbot.api.star import Context, Star
 
 __version__ = "1.2.1"
 
 KV_KEY = "muted_sessions"
 """插件 KV 存储里的键名。"""
+
+MAX_MUTE_SECONDS = 30 * 24 * 60 * 60
+"""限时静音最长 30 天；不带时长时仍然一直静音。"""
 
 ALLOW_EXTRA = "_session_switch_allow"
 """事件标记：带这个标记的事件不拦截（用于放行 /end 自己的回执）。"""
@@ -47,6 +53,43 @@ DEFAULT_ALIASES = {
     "switch": {"mute_status"},
 }
 """三个指令的固定别名。别名不可配置，但改名时要把它们算进冲突检测。"""
+
+
+def _parse_duration(raw: str) -> int | None:
+    """把 30m / 2h 这样的时长换成秒；空参数表示一直静音。"""
+    raw = raw.strip()
+    if not raw:
+        return None
+    match = re.fullmatch(r"([0-9]{1,10})([smhd])", raw, re.IGNORECASE)
+    if match:
+        seconds = (
+            int(match[1]) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[match[2].lower()]
+        )
+        if 0 < seconds <= MAX_MUTE_SECONDS:
+            return seconds
+    raise ValueError("时长须为正整数加 s/m/h/d，且不超过 30 天")
+
+
+def _format_duration(seconds: int) -> str:
+    """把剩余秒数显示成天、小时、分钟、秒，避免不足一分钟时显示为零。"""
+    parts = []
+    for size, unit in ((86400, "天"), (3600, "小时"), (60, "分钟"), (1, "秒")):
+        value, seconds = divmod(seconds, size)
+        if value:
+            parts.append(f"{value} {unit}")
+    return " ".join(parts) or "0 秒"
+
+
+def _expiry_time(info: dict[str, Any]) -> int | float | None:
+    """旧版记录没有到期时间，仍按一直静音处理；忽略损坏的到期字段。"""
+    value = info.get("expires_at")
+    if type(value) in (int, float):
+        try:
+            if math.isfinite(value):
+                return value
+        except OverflowError:
+            pass
+    return None
 
 
 def _hook(name: str):
@@ -140,6 +183,8 @@ class SessionSwitchPlugin(Star):
         super().__init__(context, config)
         self.config: dict[str, Any] = config or {}
         self._muted: dict[str, dict[str, Any]] = {}
+        self._expiry_tasks: dict[str, asyncio.Task[None]] = {}
+        self._save_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -158,6 +203,14 @@ class SessionSwitchPlugin(Star):
             }
         else:
             self._muted = {}
+
+        expired = [umo for umo in self._muted if self._active_mute_info(umo) is None]
+        for umo in expired:
+            del self._muted[umo]
+        if expired:
+            await self._save()
+        for umo in self._muted:
+            self._schedule_expiry(umo)
 
         renamed = self._apply_command_names()
 
@@ -200,7 +253,13 @@ class SessionSwitchPlugin(Star):
         return applied
 
     async def terminate(self) -> None:
-        """插件卸载/重载前落盘一次，避免丢状态。"""
+        """卸载/重载前取消计时任务并落盘；下次加载仍按保存的到期时间恢复。"""
+        tasks = list(self._expiry_tasks.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._expiry_tasks.clear()
         await self._save()
 
     # ------------------------------------------------------------------
@@ -325,14 +384,77 @@ class SessionSwitchPlugin(Star):
     # 状态存取
     # ------------------------------------------------------------------
     async def _save(self) -> None:
+        # 计时到期和手动操作都可能写状态；串行保存快照，避免旧写入覆盖新状态。
+        async with self._save_lock:
+            try:
+                data = {umo: dict(info) for umo, info in self._muted.items()}
+                await self.put_kv_data(KV_KEY, data)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[session_switch] 保存静默状态失败: {e}")
+
+    def _active_mute_info(self, umo: str) -> dict[str, Any] | None:
+        """以到期时间为准，计时任务尚未调度时也不会继续拦截已到期会话。"""
+        info = self._muted.get(umo)
+        if info is not None:
+            expires_at = _expiry_time(info)
+            if expires_at is None or expires_at > time.time():
+                return info
+        return None
+
+    def _cancel_expiry(self, umo: str) -> None:
+        task = self._expiry_tasks.pop(umo, None)
+        if task is not None:
+            task.cancel()
+
+    def _schedule_expiry(self, umo: str) -> None:
+        self._cancel_expiry(umo)
+        info = self._muted.get(umo)
+        if info is not None and _expiry_time(info) is not None:
+            self._expiry_tasks[umo] = asyncio.create_task(self._resume_after(umo, info))
+
+    async def _resume_after(self, umo: str, info: dict[str, Any]) -> None:
+        """到期后恢复，可选发送恢复文案；旧任务不能解除后来重新设置的静音。"""
         try:
-            await self.put_kv_data(KV_KEY, self._muted)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"[session_switch] 保存静默状态失败: {e}")
+            expires_at = _expiry_time(info)
+            if expires_at is None:
+                return
+            while self._muted.get(umo) is info:
+                remaining = expires_at - time.time()
+                if remaining > 0:
+                    # 定期重看时间，兼顾长时间静音和系统时钟调整。
+                    await asyncio.sleep(min(remaining, 60))
+                    continue
+                del self._muted[umo]
+                await self._save()
+                logger.info(f"[session_switch] 限时静音到期，已恢复输出 umo={umo}")
+                if (
+                    self._enabled
+                    and self.config.get("timed_mute_notify_on_expire", False)
+                    and umo not in self._muted
+                ):
+                    try:
+                        sent = await self.context.send_message(
+                            umo,
+                            MessageChain().message(
+                                self._cfg_text("begin_text", "已启用输出")
+                            ),
+                        )
+                        if sent is False:
+                            logger.warning(
+                                f"[session_switch] 未找到平台，无法发送到期提醒 umo={umo}"
+                            )
+                    except Exception as e:  # noqa: BLE001 - 通知失败不影响恢复
+                        logger.warning(
+                            f"[session_switch] 发送到期提醒失败 umo={umo}: {e}"
+                        )
+                return
+        finally:
+            if self._expiry_tasks.get(umo) is asyncio.current_task():
+                self._expiry_tasks.pop(umo, None)
 
     def _is_muted(self, event: AstrMessageEvent) -> bool:
         try:
-            return event.unified_msg_origin in self._muted
+            return self._active_mute_info(event.unified_msg_origin) is not None
         except Exception:  # noqa: BLE001
             return False
 
@@ -340,8 +462,10 @@ class SessionSwitchPlugin(Star):
     # 指令：/end  关闭输出
     # ------------------------------------------------------------------
     @filter.command("end", alias={"mute"})
-    async def cmd_end(self, event: AstrMessageEvent) -> None:
-        """让机器人闭嘴：关闭本会话的输出。"""
+    async def cmd_end(
+        self, event: AstrMessageEvent, duration_text: str = "", extra: str = ""
+    ) -> None:
+        """让机器人闭嘴：可带 30m / 2h 等时长，到期自动恢复。"""
         if not self._enabled:
             event.set_result(MessageEventResult().message("会话开关插件已停用。"))
             return
@@ -350,24 +474,49 @@ class SessionSwitchPlugin(Star):
             event.set_result(MessageEventResult().message(self._deny_text(event)))
             return
 
+        # 使用框架在命令匹配时保存的参数；其他处理器可能随后给消息追加上下文。
+        # 多接收一个参数用于拒绝多余内容，避免 /end 1h 30m 被静默当成一小时。
+        try:
+            if extra:
+                raise ValueError("关闭指令只接受一个时长")
+            duration = _parse_duration(duration_text)
+        except ValueError:
+            name = self._command_names["end"]
+            event.set_result(
+                MessageEventResult().message(
+                    f"时长格式不对。请用 /{name} 30m 或 /{name} 2h。\n"
+                    "支持正整数加 s（秒）/m（分钟）/h（小时）/d（天），最长 30 天。"
+                    "不带时长则一直静音。"
+                )
+            )
+            return
+
         umo = event.unified_msg_origin
-        already = umo in self._muted
+        already = self._is_muted(event)
+        now = time.time()
         self._muted[umo] = {
             "by": str(event.get_sender_id()),
-            "at": int(time.time()),
+            "at": int(now),
         }
+        if duration is not None:
+            self._muted[umo]["expires_at"] = now + duration
+        self._schedule_expiry(umo)
         await self._save()
 
         # 放行这条回执本身，否则会被下面的 on_decorating_result 吞掉
         event.set_extra(ALLOW_EXTRA, True)
-        if already and self.config.get("end_repeat_hint", True):
+        if duration is not None:
+            text = self._cfg_text("end_text", "已关闭输出")
+            if self.config.get("timed_mute_show_duration", False):
+                text += f"\n将在 {_format_duration(duration)}后自动恢复。"
+        elif already and self.config.get("end_repeat_hint", True):
             text = self._repeat_reply("end_repeat_text", "（本来就是关着的）")
         else:
             text = self._cfg_text("end_text", "已关闭输出")
         event.set_result(MessageEventResult().message(text))
         logger.info(
             f"[session_switch] 关闭输出 umo={umo} by={event.get_sender_id()} "
-            f"重复操作={already}"
+            f"重复操作={already} 时长秒数={duration}"
         )
 
     # ------------------------------------------------------------------
@@ -385,8 +534,9 @@ class SessionSwitchPlugin(Star):
             return
 
         umo = event.unified_msg_origin
-        was_muted = self._muted.pop(umo, None) is not None
-        if was_muted:
+        was_muted = self._is_muted(event)
+        self._cancel_expiry(umo)
+        if self._muted.pop(umo, None) is not None:
             await self._save()
 
         event.set_extra(ALLOW_EXTRA, True)
@@ -411,8 +561,8 @@ class SessionSwitchPlugin(Star):
             return
 
         umo = event.unified_msg_origin
-        info = self._muted.get(umo)
-        if info:
+        info = self._active_mute_info(umo)
+        if info is not None:
             at = info.get("at")
             when = (
                 time.strftime("%m-%d %H:%M", time.localtime(at))
@@ -422,8 +572,12 @@ class SessionSwitchPlugin(Star):
             text = (
                 f"本会话当前：已关闭输出\n"
                 f"操作人：{info.get('by', '未知')}  时间：{when}\n"
-                f"发送 /{self._command_names['begin']} 可以恢复。"
             )
+            expires_at = _expiry_time(info)
+            if expires_at is not None:
+                remaining = max(0, math.ceil(expires_at - time.time()))
+                text += f"剩余：{_format_duration(remaining)}，到期自动恢复\n"
+            text += f"发送 /{self._command_names['begin']} 可以恢复。"
         else:
             text = "本会话当前：正常输出"
         event.set_result(MessageEventResult().message(text))
